@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STIG-Net Synthetic Traffic Dashboard</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
+#loading-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,0.95);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#loading-overlay.hidden{display:none}
+.spinner{width:48px;height:48px;border:5px solid #e0e0e0;border-top-color:#1a73e8;border-radius:50%;animation:spin 0.8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loading-text{margin-top:16px;font-size:16px;color:#555}
+#loading-progress{margin-top:8px;font-size:13px;color:#888}
+#error-banner{display:none;background:#fce8e6;color:#c5221f;padding:12px 24px;text-align:center;font-weight:500}
+#error-banner.show{display:block}
+#app-header{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);color:#fff;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+#app-header h1{font-size:20px;font-weight:600;letter-spacing:.5px}
+#app-header .badge{background:rgba(255,255,255,.15);padding:5px 14px;border-radius:20px;font-size:13px}
+#controls{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:10px 24px;background:#fff;border-bottom:1px solid #e0e0e0;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.control-group{display:flex;align-items:center;gap:6px}
+.control-group label{font-size:13px;font-weight:600;color:#555;white-space:nowrap}
+.control-group input[type="range"]{width:120px;accent-color:#1a73e8}
+.control-group .range-val{font-size:12px;color:#888;min-width:32px;text-align:center;font-variant-numeric:tabular-nums}
+.metric-toggle{display:flex;border-radius:6px;overflow:hidden;border:1px solid #ccc}
+.metric-toggle button{padding:5px 14px;font-size:12px;font-weight:600;border:none;background:#f8f9fa;color:#555;cursor:pointer;transition:all .15s}
+.metric-toggle button:not(:last-child){border-right:1px solid #ccc}
+.metric-toggle button.active{background:#1a73e8;color:#fff}
+.metric-toggle button:hover:not(.active){background:#e8eaed}
+.control-group select{padding:5px 10px;font-size:12px;border:1px solid #ccc;border-radius:6px;background:#fff;min-width:140px}
+#dashboard-grid{display:grid;grid-template-columns:6fr 4fr;grid-template-rows:auto auto auto;gap:14px;padding:14px 20px}
+.panel{background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.07);overflow:hidden;display:flex;flex-direction:column}
+.panel-header{padding:10px 18px;font-size:14px;font-weight:600;color:#1a1a2e;border-bottom:1px solid #f0f0f0;background:#fafbfc;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.panel-body{flex:1;min-height:0;position:relative}
+.panel-body .plot-container{width:100%;height:100%}
+#panel-network{grid-row:1;grid-column:1;min-height:500px}
+#panel-timeseries{grid-row:1;grid-column:2;min-height:500px}
+#panel-propagation{grid-row:2;grid-column:1/span 2;min-height:380px}
+#panel-quality{grid-row:3;grid-column:1/span 2;min-height:300px}
+.quality-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;padding:14px;height:100%}
+.quality-section{min-width:0;overflow:hidden;display:flex;flex-direction:column}
+.quality-section h4{font-size:13px;margin-bottom:8px;color:#444;flex-shrink:0}
+.stats-table{width:100%;border-collapse:collapse;font-size:12px}
+.stats-table th,.stats-table td{padding:5px 10px;text-align:right;border-bottom:1px solid #eee}
+.stats-table th{background:#f8f9fa;font-weight:600;text-align:center;color:#555}
+.stats-table td:first-child{text-align:left;font-weight:500}
+.incident-table{width:100%;border-collapse:collapse;font-size:11px}
+.incident-table th,.incident-table td{padding:4px 8px;text-align:center;border-bottom:1px solid #eee}
+.incident-table th{background:#f8f9fa;font-weight:600;color:#555;white-space:nowrap}
+#panel-propagation select{padding:4px 10px;font-size:12px;border:1px solid #ccc;border-radius:4px}
+@media(max-width:900px){
+  #dashboard-grid{grid-template-columns:1fr}
+  #panel-network{grid-column:1}#panel-timeseries{grid-column:1}
+  #panel-propagation{grid-column:1}#panel-quality{grid-column:1}
+  .quality-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div id="loading-text">Loading viz_data.json...</div>
+  <div id="loading-progress"></div>
+</div>
+
+<div id="error-banner"></div>
+
+<div id="app-header">
+  <h1>STIG-Net Synthetic Traffic Dashboard</h1>
+  <span class="badge" id="header-badge">Loading...</span>
+</div>
+
+<div id="controls">
+  <div class="control-group">
+    <label>Day:</label>
+    <input type="range" id="day-slider" min="0" max="13" value="7" step="1">
+    <span class="range-val" id="day-val">Day 8</span>
+  </div>
+  <div class="control-group">
+    <label>Time:</label>
+    <input type="range" id="time-slider" min="0" max="287" value="144" step="1">
+    <span class="range-val" id="time-val">12:00</span>
+  </div>
+  <div class="control-group">
+    <label>Metric:</label>
+    <div class="metric-toggle" id="metric-toggle">
+      <button data-metric="flow" class="active">Flow</button>
+      <button data-metric="speed">Speed</button>
+      <button data-metric="delay">Delay</button>
+    </div>
+  </div>
+  <div class="control-group">
+    <label>Link:</label>
+    <select id="link-select"><option value="-1">All Links (Average)</option></select>
+  </div>
+</div>
+
+<div id="dashboard-grid">
+  <div class="panel" id="panel-network">
+    <div class="panel-header">Network Topology<span style="font-weight:400;font-size:11px;color:#888;">Click segment to select link</span></div>
+    <div class="panel-body"><div class="plot-container" id="plot-network"></div></div>
+  </div>
+  <div class="panel" id="panel-timeseries">
+    <div class="panel-header">Time Series<span style="font-weight:400;font-size:11px;color:#888;" id="ts-link-label">All Links (Average)</span></div>
+    <div class="panel-body"><div class="plot-container" id="plot-timeseries"></div></div>
+  </div>
+  <div class="panel" id="panel-propagation">
+    <div class="panel-header">Incident Propagation
+      <select id="incident-select"></select>
+    </div>
+    <div class="panel-body"><div class="plot-container" id="plot-propagation"></div></div>
+  </div>
+  <div class="panel" id="panel-quality">
+    <div class="panel-header">Data Quality Report</div>
+    <div class="panel-body"><div class="quality-grid" id="quality-grid-content">
+      <div class="quality-section" id="quality-stats"></div>
+      <div class="quality-section" id="quality-weather"><div class="plot-container" style="flex:1;min-height:0"></div></div>
+      <div class="quality-section" id="quality-incidents" style="overflow-y:auto"></div>
+    </div></div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════
+var STEPS_PER_DAY = 288;
+var STEP_MINUTES = 5;
+
+var METRIC_CFG = {
+  flow:  { scale:'Greens',  name:'Flow (veh/5min)', line:'#27ae60', axisLabel:'Flow (veh/5min)' },
+  speed: { scale:'Reds',    name:'Speed (km/h)',     line:'#e74c3c', axisLabel:'Speed (km/h)' },
+  delay: { scale:'Oranges', name:'Delay (s)',        line:'#e67e22', axisLabel:'Delay (s)' }
+};
+
+// ═══════════════════════════════════════════════════════════════
+// Global state
+// ═══════════════════════════════════════════════════════════════
+var gData = null;
+var gState = { day:7, step:144, metric:'flow', selectedLink:-1, selectedIncident:0 };
+var gLinkIdxById = {};  // link_id -> array index
+
+// ═══════════════════════════════════════════════════════════════
+// Utility helpers
+// ═══════════════════════════════════════════════════════════════
+function curTimestep() { return gState.day * STEPS_PER_DAY + gState.step; }
+
+function formatTime(stepInDay) {
+  var m = stepInDay * STEP_MINUTES;
+  var hh = Math.floor(m / 60);
+  var mm = m % 60;
+  return (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm;
+}
+
+function formatHourLabel(stepInDay) {
+  var h = Math.floor(stepInDay * STEP_MINUTES / 60);
+  return (h < 10 ? '0' : '') + h + ':00';
+}
+
+function debounce(fn, ms) {
+  var timer = null;
+  return function() {
+    var ctx = this, args = arguments;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function() { timer = null; fn.apply(ctx, args); }, ms);
+  };
+}
+
+function arrMin(arr) { var m = arr[0]; for (var i = 1; i < arr.length; i++) if (arr[i] < m) m = arr[i]; return m; }
+function arrMax(arr) { var m = arr[0]; for (var i = 1; i < arr.length; i++) if (arr[i] > m) m = arr[i]; return m; }
+
+// ═══════════════════════════════════════════════════════════════
+// Data loading with progress
+// ═══════════════════════════════════════════════════════════════
+function loadData() {
+  var overlay  = document.getElementById('loading-overlay');
+  var textEl   = document.getElementById('loading-text');
+  var progEl   = document.getElementById('loading-progress');
+  var errBanner = document.getElementById('error-banner');
+
+  textEl.textContent = 'Loading viz_data.json...';
+  progEl.textContent = 'Starting fetch (large file ~8 MB)...';
+
+  return fetch('viz_data.json').then(function(resp) {
+    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+    var contentLength = resp.headers.get('content-length');
+    var total = contentLength ? parseInt(contentLength, 10) : 0;
+
+    if (total && resp.body && typeof ReadableStream !== 'undefined') {
+      var reader = resp.body.getReader();
+      var chunks = [];
+      var received = 0;
+      function pump() {
+        return reader.read().then(function(result) {
+          if (result.done) {
+            var all = new Uint8Array(received);
+            var pos = 0;
+            for (var i = 0; i < chunks.length; i++) { all.set(chunks[i], pos); pos += chunks[i].length; }
+            textEl.textContent = 'Parsing JSON...';
+            progEl.textContent = '';
+            var decoder = new TextDecoder('utf-8');
+            gData = JSON.parse(decoder.decode(all));
+            return gData;
+          }
+          chunks.push(result.value);
+          received += result.value.length;
+          if (total) {
+            var pct = Math.round(received / total * 100);
+            progEl.textContent = 'Downloaded ' + (received/1048576).toFixed(1) + ' MB / ' + (total/1048576).toFixed(1) + ' MB (' + pct + '%)';
+          }
+          return pump();
+        });
+      }
+      return pump();
+    } else {
+      return resp.json().then(function(json) { gData = json; return gData; });
+    }
+  }).then(function(data) {
+    overlay.classList.add('hidden');
+    return data;
+  }).catch(function(err) {
+    textEl.textContent = 'Failed to load data.';
+    progEl.textContent = err.message;
+    errBanner.textContent = 'Error loading viz_data.json: ' + err.message + ' — Ensure the file exists in the same directory and is served via HTTP.';
+    errBanner.classList.add('show');
+    throw err;
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Panel 1: Network Topology (road-segment lines instead of nodes)
+// ═══════════════════════════════════════════════════════════════
+
+// Color interpolation for metric → hex color
+function metricColor(val, minVal, maxVal, metric) {
+  if (maxVal - minVal < 1e-6) return metric === 'speed' ? '#27ae60' : '#e74c3c';
+  var t = Math.max(0, Math.min(1, (val - minVal) / (maxVal - minVal)));
+  var r, g, b;
+  if (metric === 'speed') {
+    // red→yellow→green (low speed = bad = red)
+    r = t < 0.5 ? 255 : Math.round(255 - (t - 0.5) * 2 * 221);
+    g = t < 0.5 ? Math.round(t * 2 * 215) : 215 + Math.round((t - 0.5) * 2 * 40);
+    b = t < 0.5 ? 0 : Math.round((t - 0.5) * 2 * 0);
+  } else if (metric === 'delay') {
+    // white→orange→red
+    r = 255;
+    g = Math.round(255 - t * 183);
+    b = Math.round(255 - t * 235);
+  } else {
+    // flow: green→yellow→red (low flow = green)
+    r = t < 0.5 ? Math.round(t * 2 * 221) : 221 + Math.round((t - 0.5) * 2 * 34);
+    g = t < 0.5 ? 139 + Math.round(t * 2 * 76) : 215 - Math.round((t - 0.5) * 2 * 195);
+    b = t < 0.5 ? 34 - Math.round(t * 2 * 34) : 0 + Math.round((t - 0.5) * 2 * 60);
+  }
+  return 'rgb(' + r + ',' + g + ',' + b + ')';
+}
+
+function getLinkEndpoints(link) {
+  var x = link.position.x, y = link.position.y;
+  if (link.is_horizontal) {
+    return { x0: x - 0.75, y0: y, x1: x + 0.75, y1: y };
+  } else {
+    return { x0: x, y0: y + 0.75, x1: x, y1: y - 0.75 };
+  }
+}
+
+function buildNetworkFigure() {
+  var links = gData.network.links;
+  var N = gData.meta.num_links;
+
+  links.forEach(function(l, i) { gLinkIdxById[l.link_id] = i; });
+
+  var traces = [];
+
+  // One trace per link: line segment + a clickable midpoint marker
+  links.forEach(function(link, i) {
+    var ep = getLinkEndpoints(link);
+    var midX = link.position.x, midY = link.position.y;
+
+    var hoverText = '<b>Link ' + link.link_id + '</b><br>' +
+      'Class: ' + link.road_class_name + '<br>' +
+      'Lanes: ' + link.lanes + '<br>' +
+      'Capacity: ' + link.capacity + ' veh/h<br>' +
+      'Direction: ' + link.direction;
+
+    traces.push({
+      x: [ep.x0, ep.x1, midX],
+      y: [ep.y0, ep.y1, midY],
+      mode: 'lines+markers',
+      type: 'scatter',
+      line: { width: 5, color: '#888' },
+      marker: { size: 12, color: 'rgba(128,128,128,0.01)', symbol: 'circle', line: { width: 0 } },
+      text: hoverText,
+      hoverinfo: 'text',
+      hoverlabel: { bgcolor: '#fff', bordercolor: '#666', font: { size: 12, color: '#333' } },
+      name: 'Link ' + link.link_id,
+      showlegend: false,
+      customdata: link.link_id
+    });
+  });
+
+  // Link ID labels — offset from midpoint based on direction
+  var labX = [], labY = [], labText = [];
+  links.forEach(function(link) {
+    var offX = link.is_horizontal ? 0 : 0.22;
+    var offY = link.is_horizontal ? -0.22 : 0;
+    labX.push(link.position.x + offX);
+    labY.push(link.position.y + offY);
+    labText.push('' + link.link_id);
+  });
+  traces.push({
+    x: labX, y: labY, mode: 'text', type: 'scatter',
+    text: labText, textfont: { size: 12, color: '#1a1a2e', family: 'Segoe UI, sans-serif' },
+    textposition: 'middle center',
+    hoverinfo: 'none', showlegend: false, name: 'Labels'
+  });
+
+  // Intersection dots
+  var interX = [], interY = [];
+  var H_ROADS = 3, V_ROADS = 5;
+  for (var rowc = 0; rowc < H_ROADS; rowc++) {
+    for (var colc = 0; colc < V_ROADS; colc++) {
+      interX.push(colc * 1.5);
+      interY.push((H_ROADS - 1 - rowc) * 1.5);
+    }
+  }
+  traces.push({
+    x: interX, y: interY, mode: 'markers', type: 'scatter',
+    marker: { size: 5, color: '#555', symbol: 'square' },
+    hoverinfo: 'none', showlegend: false, name: 'Intersections'
+  });
+
+  var xPad = 1.2, yPad = 1.2;
+  var layout = {
+    hovermode: 'closest',
+    margin: { l: 30, r: 30, t: 10, b: 30 },
+    xaxis: { showgrid: false, zeroline: false, showticklabels: false,
+             range: [-xPad, V_ROADS * 1.5 + xPad - 1.5] },
+    yaxis: { showgrid: false, zeroline: false, showticklabels: false,
+             range: [-yPad, H_ROADS * 1.5 + yPad - 1.5], scaleanchor: 'x', scaleratio: 1.2 },
+    dragmode: 'pan'
+  };
+
+  var config = { displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d'], displaylogo: false, responsive: true };
+
+  Plotly.newPlot('plot-network', traces, layout, config);
+
+  // Click handler: select link from trace index
+  var plotDiv = document.getElementById('plot-network');
+  plotDiv.removeAllListeners && plotDiv.removeAllListeners('plotly_click');
+  plotDiv.on('plotly_click', function(evt) {
+    if (!evt || !evt.points || !evt.points.length) return;
+    var pt = evt.points[0];
+    var traceIdx = pt.curveNumber;
+    if (traceIdx < N && pt.data.customdata !== undefined) {
+      var lid = pt.data.customdata;
+      gState.selectedLink = lid;
+      document.getElementById('link-select').value = lid;
+      document.getElementById('ts-link-label').textContent = 'Link ' + lid;
+      updateTimeSeries();
+    }
+  });
+}
+
+function updateNetworkTopology() {
+  var fig = document.getElementById('plot-network');
+  if (!fig || !fig.data) return;
+
+  var t = curTimestep();
+  var N = gData.meta.num_links;
+  var metricKey = gState.metric;
+
+  var metricVals = new Array(N);
+  var flowVals = new Array(N);
+  for (var i = 0; i < N; i++) {
+    metricVals[i] = gData.traffic[metricKey][i][t];
+    flowVals[i] = gData.traffic.flow[i][t];
+  }
+
+  var mMin = arrMin(metricVals), mMax = arrMax(metricVals);
+  if (mMax - mMin < 1e-6) { mMax = mMin + 1; }
+
+  var fMin = arrMin(flowVals), fMax = arrMax(flowVals), fRange = fMax - fMin || 1;
+
+  var colors = [], widths = [], texts = [];
+  for (var i = 0; i < N; i++) {
+    colors.push(metricColor(metricVals[i], mMin, mMax, metricKey));
+    widths.push(3 + (flowVals[i] - fMin) / fRange * 12);
+    var hasIncident = gData.incidents.mask[i][t];
+    texts.push(
+      '<b>Link ' + gData.network.links[i].link_id + '</b>' +
+      (hasIncident ? ' <span style="color:#e74c3c">&#9888; INCIDENT</span>' : '') + '<br>' +
+      'Class: ' + gData.network.links[i].road_class_name + '<br>' +
+      'Lanes: ' + gData.network.links[i].lanes + '<br>' +
+      'Capacity: ' + gData.network.links[i].capacity + ' veh/h<br>' +
+      'Direction: ' + gData.network.links[i].direction + '<br>' +
+      'Flow: ' + flowVals[i].toFixed(1) + ' veh/5min<br>' +
+      'Speed: ' + gData.traffic.speed[i][t].toFixed(1) + ' km/h<br>' +
+      'Delay: ' + gData.traffic.delay[i][t].toFixed(1) + ' s'
+    );
+  }
+
+  // Batch update all link traces at once
+  var traceIndices = [];
+  for (var j = 0; j < N; j++) { traceIndices.push(j); }
+  Plotly.restyle(fig, {
+    'line.color': colors,
+    'line.width': widths,
+    text: texts
+  }, traceIndices);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Panel 2: Time Series
+// ═══════════════════════════════════════════════════════════════
+function buildTimeSeriesFigure() {
+  var xVals = [];
+  for (var i = 0; i < STEPS_PER_DAY; i++) xVals.push(i);
+
+  // Tick marks every 2 hours (24 steps per hour, so every 48 steps at 5-min resolution... no, 12 steps per hour)
+  // 5 min steps => 12 steps per hour. Tick every 3 hours = 36 steps.
+  var tickStep = 36;
+  var tickVals = [], tickTexts = [];
+  for (var j = 0; j < STEPS_PER_DAY; j += tickStep) {
+    tickVals.push(j);
+    tickTexts.push(formatHourLabel(j));
+  }
+
+  var traces = [
+    { x: xVals, y: xVals.map(function(){return 0;}), mode:'lines', name:'Flow',
+      line:{color:METRIC_CFG.flow.line, width:2}, yaxis:'y' },
+    { x: xVals, y: xVals.map(function(){return 0;}), mode:'lines', name:'Speed',
+      line:{color:METRIC_CFG.speed.line, width:2}, yaxis:'y2' },
+    { x: xVals, y: xVals.map(function(){return 0;}), mode:'lines', name:'Delay',
+      line:{color:METRIC_CFG.delay.line, width:2, dash:'dot'}, yaxis:'y2' }
+  ];
+
+  var layout = {
+    margin: { l:50, r:50, t:10, b:45 },
+    xaxis: { title:'Time of Day', dtick:tickStep, tickvals:tickVals, ticktext:tickTexts, gridcolor:'#eee' },
+    yaxis: { title:METRIC_CFG.flow.axisLabel, side:'left', color:METRIC_CFG.flow.line, gridcolor:'#eee' },
+    yaxis2: { title:'Speed (km/h) / Delay (s)', side:'right', color:METRIC_CFG.speed.line, overlaying:'y', gridcolor:'transparent' },
+    legend: { x:0.01, y:0.99, bgcolor:'rgba(255,255,255,0.85)', bordercolor:'#ddd', borderwidth:1, font:{size:10} },
+    shapes: [], hovermode:'x unified'
+  };
+
+  Plotly.newPlot('plot-timeseries', traces, layout, { displayModeBar:true, displaylogo:false, responsive:true });
+}
+
+function updateTimeSeries() {
+  var fig = document.getElementById('plot-timeseries');
+  if (!fig || !fig.data) return;
+
+  var dayStart = gState.day * STEPS_PER_DAY;
+  var N = gData.meta.num_links;
+  var selLink = gState.selectedLink;
+  var nSteps = STEPS_PER_DAY;
+
+  var flowY = new Array(nSteps), speedY = new Array(nSteps), delayY = new Array(nSteps);
+
+  if (selLink >= 0 && selLink < N) {
+    for (var i = 0; i < nSteps; i++) {
+      var ts = dayStart + i;
+      flowY[i]  = gData.traffic.flow[selLink][ts];
+      speedY[i] = gData.traffic.speed[selLink][ts];
+      delayY[i] = gData.traffic.delay[selLink][ts];
+    }
+  } else {
+    // Network average
+    for (var j = 0; j < nSteps; j++) {
+      var ts2 = dayStart + j;
+      var fSum = 0, sSum = 0, dSum = 0;
+      for (var n = 0; n < N; n++) {
+        fSum += gData.traffic.flow[n][ts2];
+        sSum += gData.traffic.speed[n][ts2];
+        dSum += gData.traffic.delay[n][ts2];
+      }
+      flowY[j]  = fSum / N;
+      speedY[j] = sSum / N;
+      delayY[j] = dSum / N;
+    }
+  }
+
+  Plotly.restyle(fig, { y:[flowY]  }, [0]);
+  Plotly.restyle(fig, { y:[speedY] }, [1]);
+  Plotly.restyle(fig, { y:[delayY] }, [2]);
+
+  // Build shapes: incident spans + current timestep line
+  var shapes = [];
+
+  // Incident spans (if a specific link is selected)
+  if (selLink >= 0) {
+    var dayStartStep = gState.day * STEPS_PER_DAY;
+    var dayEndStep = dayStartStep + STEPS_PER_DAY;
+    gData.incidents.events.forEach(function(inc) {
+      if (inc.link_id === selLink) {
+        var is0 = inc.start_step, ie0 = inc.end_step;
+        if (ie0 > dayStartStep && is0 < dayEndStep) {
+          var x0 = Math.max(0, is0 - dayStartStep);
+          var x1 = Math.min(STEPS_PER_DAY, ie0 - dayStartStep);
+          shapes.push({
+            type:'rect', xref:'x', yref:'paper',
+            x0:x0, x1:x1, y0:0, y1:1,
+            fillcolor:'rgba(231,76,60,0.12)', line:{width:0}, layer:'below'
+          });
+        }
+      }
+    });
+  }
+
+  // Current timestep vertical line
+  shapes.push({
+    type:'line', xref:'x', yref:'paper',
+    x0:gState.step, x1:gState.step, y0:0, y1:1,
+    line:{color:'#333', width:1.5, dash:'dash'}
+  });
+
+  Plotly.relayout(fig, { shapes:shapes });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Panel 3: Incident Propagation
+// ═══════════════════════════════════════════════════════════════
+function buildPropagationFigure() {
+  var incidents = gData.incidents.events;
+  var sel = document.getElementById('incident-select');
+
+  incidents.forEach(function(inc, idx) {
+    var opt = document.createElement('option');
+    opt.value = idx;
+    opt.textContent = 'Incident ' + (idx+1) + ': Link ' + inc.link_id +
+      ' (Day ' + (inc.start_day+1) + ', ' + formatTime(inc.start_step % STEPS_PER_DAY) + ')';
+    sel.appendChild(opt);
+  });
+
+  var layout = {
+    margin: { l:50, r:30, t:10, b:45 },
+    xaxis: { title:'Time relative to incident start (minutes)', gridcolor:'#eee' },
+    yaxis: { title:'Speed (km/h)', gridcolor:'#eee' },
+    legend: { x:0.01, y:0.99, bgcolor:'rgba(255,255,255,0.85)', bordercolor:'#ddd', borderwidth:1, font:{size:10} },
+    shapes: [], hovermode:'x unified'
+  };
+
+  Plotly.newPlot('plot-propagation', [], layout, { displayModeBar:true, displaylogo:false, responsive:true });
+
+  sel.addEventListener('change', function() {
+    gState.selectedIncident = parseInt(sel.value, 10);
+    updatePropagation();
+  });
+
+  updatePropagation();
+}
+
+function updatePropagation() {
+  var fig = document.getElementById('plot-propagation');
+  if (!fig || !fig.data) return;
+
+  var inc = gData.incidents.events[gState.selectedIncident];
+  if (!inc) return;
+
+  var T = gData.meta.num_timesteps;
+  var windowHalf = 24; // ±2 hours in 5-min steps
+  var tStart = Math.max(0, inc.start_step - windowHalf);
+  var tEnd = Math.min(T - 1, inc.end_step + windowHalf);
+
+  // Links to plot: incident link + 1-hop upstream
+  var linksToPlot = [inc.link_id];
+  if (inc.upstream_1hop) {
+    inc.upstream_1hop.forEach(function(lid) { linksToPlot.push(lid); });
+  }
+
+  var colorPalette = ['#e74c3c','#2980b9','#27ae60','#8e44ad','#e67e22','#1abc9c','#f39c12','#2c3e50'];
+  var traces = linksToPlot.map(function(lid, idx) {
+    var yVals = [], xMins = [];
+    for (var t = tStart; t <= tEnd; t++) {
+      yVals.push(gData.traffic.speed[lid][t]);
+      xMins.push((t - inc.start_step) * STEP_MINUTES);
+    }
+    var isIncLink = (lid === inc.link_id);
+    return {
+      x: xMins, y: yVals, mode:'lines', type:'scatter',
+      name: 'L' + lid + (isIncLink ? ' (Incident)' : ' (Upstream)'),
+      line: { color:colorPalette[idx % colorPalette.length], width:isIncLink ? 3 : 1.8,
+              dash: isIncLink ? 'solid' : 'dash' },
+      hovertemplate: 'L' + lid + ': %{y:.1f} km/h<extra></extra>'
+    };
+  });
+
+  // Incident duration span (red)
+  var durMins = inc.duration_steps * STEP_MINUTES;
+  var shape = {
+    type:'rect', xref:'x', yref:'paper',
+    x0:0, x1:durMins, y0:0, y1:1,
+    fillcolor:'rgba(231,76,60,0.1)', line:{width:0}, layer:'below'
+  };
+
+  Plotly.react(fig, traces, {
+    xaxis: { title:'Time relative to incident start (minutes)' },
+    yaxis: { title:'Speed (km/h)' },
+    shapes: [shape],
+    legend: { x:0.01, y:0.99 }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Panel 4: Data Quality
+// ═══════════════════════════════════════════════════════════════
+function buildDataQuality() {
+  var dq = gData.data_quality;
+
+  // ── Stats table ──
+  var html = '<h4>Summary Statistics</h4>';
+  html += '<table class="stats-table"><thead><tr><th>Metric</th><th>Mean</th><th>Std</th><th>Min</th><th>Max</th></tr></thead><tbody>';
+  html += '<tr><td>Flow</td><td>' + (dq.flow.mean||0).toFixed(1) + '</td><td>' + (dq.flow.std||0).toFixed(1) +
+           '</td><td>' + (dq.flow.min||0).toFixed(1) + '</td><td>' + (dq.flow.max||0).toFixed(1) + '</td></tr>';
+  html += '<tr><td>Speed</td><td>' + (dq.speed.mean||0).toFixed(1) + '</td><td>' + (dq.speed.std||0).toFixed(1) +
+           '</td><td>' + (dq.speed.min||0).toFixed(1) + '</td><td>' + (dq.speed.max||0).toFixed(1) + '</td></tr>';
+  html += '</tbody></table>';
+  html += '<p style="margin-top:10px;font-size:12px;line-height:1.6;">';
+  html += '<b>Speed Ratio:</b> Mean=' + (dq.speed_ratio_mean||0).toFixed(3) + '  Std=' + (dq.speed_ratio_std||0).toFixed(3) + '<br>';
+  html += '<b>Speed Drop During Incidents:</b> ' + (dq.speed_drop_incident_pct||0).toFixed(1) + '%';
+  html += '</p>';
+  document.getElementById('quality-stats').innerHTML = html;
+
+  // ── Weather distribution bar chart ──
+  var wp = dq.weather_pct || {};
+  var wNames = Object.keys(wp);
+  var wVals = wNames.map(function(k) { return wp[k]; });
+  if (wNames.length > 0) {
+    var barColors = ['#3498db','#95a5a6','#f39c12','#e74c3c','#1abc9c','#9b59b6','#2ecc71'];
+    var wTrace = {
+      x: wNames, y: wVals, type:'bar',
+      marker: { color: wNames.map(function(_,i){ return barColors[i % barColors.length]; }) },
+      text: wVals.map(function(v){ return v.toFixed(1)+'%'; }), textposition:'auto',
+      textfont: { size:11 }
+    };
+    var wLayout = {
+      margin: { l:60, r:20, t:35, b:55 },
+      yaxis: { title: { text:'% of Time', standoff:0 }, gridcolor:'#eee', automargin: true },
+      xaxis: { tickangle: -25, tickfont:{size:10} },
+      title: { text:'Weather Distribution', font:{size:13} }
+    };
+    Plotly.newPlot('quality-weather', [wTrace], wLayout, { displayModeBar:false, displaylogo:false, responsive:true });
+  } else {
+    document.getElementById('quality-weather').innerHTML = '<h4>Weather Distribution</h4><p style="color:#888;">No weather data.</p>';
+  }
+
+  // ── Incident list table ──
+  var incHtml = '<h4>Incident List</h4>';
+  incHtml += '<table class="incident-table"><thead><tr><th>#</th><th>Link</th><th>Day</th><th>Start</th><th>Duration</th><th>Blocked</th><th>Upstream 1-Hop</th></tr></thead><tbody>';
+  gData.incidents.events.forEach(function(inc, i) {
+    var timeStr = formatTime(inc.start_step % STEPS_PER_DAY);
+    var upList = (inc.upstream_1hop || []).join(', ');
+    incHtml += '<tr>';
+    incHtml += '<td>' + (i+1) + '</td>';
+    incHtml += '<td><b>' + inc.link_id + '</b></td>';
+    incHtml += '<td>' + (inc.start_day+1) + '</td>';
+    incHtml += '<td>' + timeStr + '</td>';
+    incHtml += '<td>' + inc.duration_min + ' min</td>';
+    incHtml += '<td>' + inc.blocked_lanes + '</td>';
+    incHtml += '<td>' + upList + '</td>';
+    incHtml += '</tr>';
+  });
+  incHtml += '</tbody></table>';
+  document.getElementById('quality-incidents').innerHTML = incHtml;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Control setup
+// ═══════════════════════════════════════════════════════════════
+function setupControls() {
+  var daySlider = document.getElementById('day-slider');
+  var timeSlider = document.getElementById('time-slider');
+  var dayVal = document.getElementById('day-val');
+  var timeVal = document.getElementById('time-val');
+  var linkSelect = document.getElementById('link-select');
+  var tsLinkLabel = document.getElementById('ts-link-label');
+
+  // Populate link dropdown
+  gData.network.links.forEach(function(l) {
+    var opt = document.createElement('option');
+    opt.value = l.link_id;
+    opt.textContent = 'Link ' + l.link_id;
+    linkSelect.appendChild(opt);
+  });
+
+  var doFullUpdate = debounce(function() {
+    updateNetworkTopology();
+    updateTimeSeries();
+  }, 40);
+
+  daySlider.addEventListener('input', function() {
+    gState.day = parseInt(daySlider.value, 10);
+    dayVal.textContent = 'Day ' + (gState.day + 1);
+    doFullUpdate();
+  });
+
+  timeSlider.addEventListener('input', function() {
+    gState.step = parseInt(timeSlider.value, 10);
+    timeVal.textContent = formatTime(gState.step);
+    doFullUpdate();
+  });
+
+  // Metric toggle buttons
+  document.querySelectorAll('#metric-toggle button').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('#metric-toggle button').forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+      gState.metric = btn.dataset.metric;
+      doFullUpdate();
+    });
+  });
+
+  // Link dropdown
+  linkSelect.addEventListener('change', function() {
+    gState.selectedLink = parseInt(linkSelect.value, 10);
+    tsLinkLabel.textContent = gState.selectedLink >= 0 ? 'Link ' + gState.selectedLink : 'All Links (Average)';
+    updateTimeSeries();
+  });
+
+  // Header badge
+  document.getElementById('header-badge').textContent =
+    gData.meta.num_links + ' Links | ' + gData.meta.num_days + ' Days | ' + gData.meta.num_incidents + ' Incidents';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Window resize handler
+// ═══════════════════════════════════════════════════════════════
+var resizePlots = debounce(function() {
+  var ids = ['plot-network','plot-timeseries','plot-propagation','quality-weather'];
+  ids.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el && el._fullLayout) {
+      try { Plotly.Plots.resize(el); } catch(e) {}
+    }
+  });
+}, 150);
+
+window.addEventListener('resize', resizePlots);
+
+// ═══════════════════════════════════════════════════════════════
+// Main entry
+// ═══════════════════════════════════════════════════════════════
+function main() {
+  loadData().then(function() {
+    buildNetworkFigure();
+    buildTimeSeriesFigure();
+    buildPropagationFigure();
+    buildDataQuality();
+    setupControls();
+    updateNetworkTopology();
+    updateTimeSeries();
+  }).catch(function(err) {
+    console.error('Dashboard init failed:', err);
+    document.getElementById('loading-overlay').classList.add('hidden');
+  });
+}
+
+main();
+</script>
+</body>
+</html>
